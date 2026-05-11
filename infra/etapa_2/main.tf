@@ -11,12 +11,17 @@ provider "aws" {
   region = var.aws_region
 }
 
+############################
+# VPC
+############################
+
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
 }
 
+# Subred pública: donde corren los contenedores ECS (accesibles desde internet)
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.1.0/24"
@@ -24,16 +29,19 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
 }
 
+# Subred privada: donde vive la EC2 con MySQL (NO accesible desde internet)
 resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.2.0/24"
   availability_zone = "${var.aws_region}a"
 }
 
+# Internet Gateway: puerta de salida/entrada para la subred pública
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 }
 
+# Tabla de rutas pública: todo el tráfico externo pasa por el IGW
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -48,6 +56,7 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+# Tabla de rutas privada: sin salida a internet (solo tráfico interno del VPC)
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 }
@@ -57,12 +66,19 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private.id
 }
 
+# S3 Gateway Endpoint (gratis): permite que yum instale paquetes en la subred
+# privada sin necesitar internet ni NAT Gateway
 resource "aws_vpc_endpoint" "s3" {
   vpc_id          = aws_vpc.main.id
   service_name    = "com.amazonaws.${var.aws_region}.s3"
   route_table_ids = [aws_route_table.private.id]
 }
 
+############################
+# SECURITY GROUPS
+############################
+
+# SG para los contenedores ECS: acepta tráfico web desde internet
 resource "aws_security_group" "ecs" {
   name   = "${var.project_name}-sg-ecs"
   vpc_id = aws_vpc.main.id
@@ -99,17 +115,10 @@ resource "aws_security_group" "ecs" {
   }
 }
 
+# SG para la EC2 MySQL: sin reglas de ingress inline (se agregan abajo con aws_security_group_rule)
 resource "aws_security_group" "db" {
   name   = "${var.project_name}-sg-db"
   vpc_id = aws_vpc.main.id
-
-  ingress {
-    description              = "MySQL solo desde ECS"
-    from_port                = 3306
-    to_port                  = 3306
-    protocol                 = "tcp"
-    source_security_group_id = aws_security_group.ecs.id
-  }
 
   egress {
     from_port   = 0
@@ -118,6 +127,21 @@ resource "aws_security_group" "db" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
+
+# Regla separada para referenciar otro security group como fuente
+resource "aws_security_group_rule" "mysql_from_ecs" {
+  type                     = "ingress"
+  from_port                = 3306
+  to_port                  = 3306
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.db.id
+  source_security_group_id = aws_security_group.ecs.id
+  description              = "MySQL solo desde ECS"
+}
+
+############################
+# ECR
+############################
 
 resource "aws_ecr_repository" "backend_ventas" {
   name         = "${var.project_name}-backend-ventas"
@@ -133,6 +157,10 @@ resource "aws_ecr_repository" "frontend" {
   name         = "${var.project_name}-frontend"
   force_delete = true
 }
+
+############################
+# EC2 MySQL (subred privada)
+############################
 
 data "aws_ami" "amazon_linux" {
   most_recent = true
@@ -156,6 +184,7 @@ resource "aws_instance" "db" {
     volume_type = "gp3"
   }
 
+  # Instala MySQL y crea las 2 bases de datos al arrancar la instancia
   user_data = <<-EOF
     #!/bin/bash
     yum update -y
@@ -163,6 +192,7 @@ resource "aws_instance" "db" {
     systemctl start mysqld
     systemctl enable mysqld
 
+    # Esperar a que MySQL esté completamente listo
     until mysqladmin ping -u root --silent 2>/dev/null; do
       sleep 2
     done
@@ -176,6 +206,7 @@ resource "aws_instance" "db" {
       FLUSH PRIVILEGES;
     EOSQL
 
+    # Permitir conexiones desde el VPC (no solo localhost)
     echo "[mysqld]" >> /etc/my.cnf
     echo "bind-address = 0.0.0.0" >> /etc/my.cnf
     systemctl restart mysqld
@@ -186,18 +217,32 @@ resource "aws_instance" "db" {
   }
 }
 
+############################
+# CLOUDWATCH LOGS
+############################
+
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/${var.project_name}"
   retention_in_days = 7
 }
 
+############################
+# ECS CLUSTER
+############################
+
 resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-cluster"
 }
 
+# LabRole: rol de AWS Academy con permisos para ECS
 data "aws_iam_role" "lab" {
   name = "LabRole"
 }
+
+############################
+# TASK DEFINITION
+# Los 3 contenedores corren juntos en la misma tarea Fargate
+############################
 
 resource "aws_ecs_task_definition" "app" {
   family                   = "${var.project_name}-app"
@@ -297,6 +342,9 @@ resource "aws_ecs_task_definition" "app" {
   ])
 }
 
+############################
+# ECS SERVICE
+############################
 
 resource "aws_ecs_service" "app" {
   name            = "app"
