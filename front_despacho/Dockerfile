@@ -8,6 +8,5 @@ RUN npm run build
 
 #Stage 2
 FROM nginx:alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /build/dist /usr/share/nginx/html
 EXPOSE 80
