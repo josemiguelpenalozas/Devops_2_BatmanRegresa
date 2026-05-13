@@ -7,7 +7,7 @@ variable "project_name" {
 }
 
 variable "key_pair_name" {
-  description = "Nombre del Key Pair de AWS para la EC2 (creado manualmente en la consola)"
+  description = "Nombre del Key Pair de AWS (creado manualmente en la consola)"
 }
 
 variable "db_password" {
@@ -22,3 +22,4 @@ variable "db_name_ventas" {
 variable "db_name_despachos" {
   default = "despachos_db"
 }
+

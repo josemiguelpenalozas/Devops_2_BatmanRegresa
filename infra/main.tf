@@ -41,7 +41,7 @@ resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 }
 
-# Tabla de rutas pública: todo el tráfico externo pasa por el IGW
+# Tabla de rutas pública
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -56,7 +56,7 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Tabla de rutas privada: sin salida a internet (solo tráfico interno del VPC)
+# Tabla de rutas privada: sin salida a internet
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 }
@@ -66,8 +66,7 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private.id
 }
 
-# S3 Gateway Endpoint (gratis): permite que yum instale paquetes en la subred
-# privada sin necesitar internet ni NAT Gateway
+# S3 Gateway Endpoint (gratis): permite que yum funcione en la subred privada
 resource "aws_vpc_endpoint" "s3" {
   vpc_id          = aws_vpc.main.id
   service_name    = "com.amazonaws.${var.aws_region}.s3"
@@ -78,7 +77,7 @@ resource "aws_vpc_endpoint" "s3" {
 # SECURITY GROUPS
 ############################
 
-# SG para los contenedores ECS: acepta tráfico web desde internet
+# SG para los contenedores ECS
 resource "aws_security_group" "ecs" {
   name   = "${var.project_name}-sg-ecs"
   vpc_id = aws_vpc.main.id
@@ -115,7 +114,7 @@ resource "aws_security_group" "ecs" {
   }
 }
 
-# SG para la EC2 MySQL: sin reglas de ingress inline (se agregan abajo con aws_security_group_rule)
+# SG para la EC2 MySQL
 resource "aws_security_group" "db" {
   name   = "${var.project_name}-sg-db"
   vpc_id = aws_vpc.main.id
@@ -128,7 +127,7 @@ resource "aws_security_group" "db" {
   }
 }
 
-# Regla separada para referenciar otro security group como fuente
+# Regla separada: solo ECS puede hablar con MySQL
 resource "aws_security_group_rule" "mysql_from_ecs" {
   type                     = "ingress"
   from_port                = 3306
@@ -140,7 +139,7 @@ resource "aws_security_group_rule" "mysql_from_ecs" {
 }
 
 ############################
-# ECR
+# ECR (3 repositorios)
 ############################
 
 resource "aws_ecr_repository" "backend_ventas" {
@@ -180,11 +179,10 @@ resource "aws_instance" "db" {
   key_name               = var.key_pair_name
 
   root_block_device {
-    volume_size = 20
+    volume_size = 30
     volume_type = "gp3"
   }
 
-  # Instala MySQL y crea las 2 bases de datos al arrancar la instancia
   user_data = <<-EOF
     #!/bin/bash
     yum update -y
@@ -192,7 +190,6 @@ resource "aws_instance" "db" {
     systemctl start mysqld
     systemctl enable mysqld
 
-    # Esperar a que MySQL esté completamente listo
     until mysqladmin ping -u root --silent 2>/dev/null; do
       sleep 2
     done
@@ -206,7 +203,6 @@ resource "aws_instance" "db" {
       FLUSH PRIVILEGES;
     EOSQL
 
-    # Permitir conexiones desde el VPC (no solo localhost)
     echo "[mysqld]" >> /etc/my.cnf
     echo "bind-address = 0.0.0.0" >> /etc/my.cnf
     systemctl restart mysqld
@@ -234,14 +230,12 @@ resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-cluster"
 }
 
-# LabRole: rol de AWS Academy con permisos para ECS
 data "aws_iam_role" "lab" {
   name = "LabRole"
 }
 
 ############################
 # TASK DEFINITION
-# Los 3 contenedores corren juntos en la misma tarea Fargate
 ############################
 
 resource "aws_ecs_task_definition" "app" {
@@ -259,14 +253,6 @@ resource "aws_ecs_task_definition" "app" {
       image = "${aws_ecr_repository.backend_ventas.repository_url}:latest"
 
       portMappings = [{ containerPort = 8080 }]
-
-      healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health/readiness || exit 1"]
-        interval    = 30
-        timeout     = 5
-        retries     = 5
-        startPeriod = 120
-      }
 
       environment = [
         { name = "DB_ENDPOINT", value = aws_instance.db.private_ip },
@@ -291,14 +277,6 @@ resource "aws_ecs_task_definition" "app" {
       image = "${aws_ecr_repository.backend_despachos.repository_url}:latest"
 
       portMappings = [{ containerPort = 8081 }]
-
-      healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health/readiness || exit 1"]
-        interval    = 30
-        timeout     = 5
-        retries     = 5
-        startPeriod = 120
-      }
 
       environment = [
         { name = "DB_ENDPOINT", value = aws_instance.db.private_ip },
