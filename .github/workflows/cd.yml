@@ -35,15 +35,15 @@ jobs:
         run: |
           docker build --platform linux/amd64 \
             -t ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/batman-backend-ventas:latest \
-            ./back-Ventas_SpringBoot
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/batman-backend-ventas:latest
+            ./back-Ventas_SpringBoot/Springboot-API-REST
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/batman-backend-ventas:latest 
 
       - name: Build y Push Backend Despachos
         run: |
           docker build --platform linux/amd64 \
             -t ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/batman-backend-despachos:latest \
-            ./back-Despachos_SpringBoot
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/batman-backend-despachos:latest
+            ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/batman-backend-despachos:latest 
 
       - name: Build y Push Frontend
         run: |
