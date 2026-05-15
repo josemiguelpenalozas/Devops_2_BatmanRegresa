@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  mysql_ventas:
+    image: mysql:8
+    container_name: mysql-ventas
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE_VENTAS}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_ventas_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mysql_despachos:
+    image: mysql:8
+    container_name: mysql-despachos
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE_DESPACHOS}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_despachos_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  backend_ventas:
+    build:
+      context: ./back-Ventas_SpringBoot/Springboot-API-REST
+      dockerfile: Dockerfile
+    container_name: backend-ventas
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_ENDPOINT=mysql_ventas
+      - DB_PORT=3306
+      - DB_NAME=${MYSQL_DATABASE_VENTAS}
+      - DB_USERNAME=root
+      - DB_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      mysql_ventas:
+        condition: service_healthy
+
+  backend_despachos:
+    build:
+      context: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+      dockerfile: Dockerfile
+    container_name: backend-despachos
+    ports:
+      - "8081:8081"
+    environment:
+      - DB_ENDPOINT=mysql_despachos
+      - DB_PORT=3306
+      - DB_NAME=${MYSQL_DATABASE_DESPACHOS}
+      - DB_USERNAME=root
+      - DB_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      mysql_despachos:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./front_despacho
+      dockerfile: Dockerfile
+    container_name: frontend-despacho
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend_ventas
+      - backend_despachos
+
+volumes:
+  mysql_ventas_data:
+  mysql_despachos_data:
