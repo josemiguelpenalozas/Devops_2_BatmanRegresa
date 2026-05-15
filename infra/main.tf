@@ -19,26 +19,75 @@ resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
+
+  tags = {
+    Name = "${var.project_name}-vpc"
+  }
 }
 
-# Subred pública: donde corren los contenedores ECS (accesibles desde internet)
+# Subred pública A: donde corren los contenedores ECS
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "${var.aws_region}a"
   map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-public-a"
+  }
 }
 
-# Subred privada: donde vive la EC2 con MySQL (NO accesible desde internet)
+# Subred pública B: segunda zona para ECS
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "${var.aws_region}b"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-public-b"
+  }
+}
+
+# Subred privada: donde vive la EC2 con MySQL
 resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.2.0/24"
+  cidr_block        = "10.0.3.0/24"
   availability_zone = "${var.aws_region}a"
+
+  tags = {
+    Name = "${var.project_name}-private"
+  }
 }
 
 # Internet Gateway: puerta de salida/entrada para la subred pública
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.project_name}-igw"
+  }
+}
+
+# EIP para el NAT Gateway
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-nat-eip"
+  }
+}
+
+# NAT Gateway: permite que la subred privada acceda a internet (para descargar Docker image)
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+
+  tags = {
+    Name = "${var.project_name}-nat"
+  }
+
+  depends_on = [aws_internet_gateway.main]
 }
 
 # Tabla de rutas pública
@@ -49,6 +98,10 @@ resource "aws_route_table" "public" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.main.id
   }
+
+  tags = {
+    Name = "${var.project_name}-rt-public"
+  }
 }
 
 resource "aws_route_table_association" "public" {
@@ -56,21 +109,28 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Tabla de rutas privada: sin salida a internet
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public.id
+}
+
+# Tabla de rutas privada: sale a internet via NAT Gateway (necesario para docker pull)
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-rt-private"
+  }
 }
 
 resource "aws_route_table_association" "private" {
   subnet_id      = aws_subnet.private.id
   route_table_id = aws_route_table.private.id
-}
-
-# S3 Gateway Endpoint (gratis): permite que yum funcione en la subred privada
-resource "aws_vpc_endpoint" "s3" {
-  vpc_id          = aws_vpc.main.id
-  service_name    = "com.amazonaws.${var.aws_region}.s3"
-  route_table_ids = [aws_route_table.private.id]
 }
 
 ############################
@@ -159,6 +219,8 @@ resource "aws_ecr_repository" "frontend" {
 
 ############################
 # EC2 MySQL (subred privada)
+# Usa Docker en lugar de instalar mysql-server directamente,
+# ya que mysql-server no está disponible en los repos de AL2023.
 ############################
 
 data "aws_ami" "amazon_linux" {
@@ -185,27 +247,53 @@ resource "aws_instance" "db" {
 
   user_data = <<-EOF
     #!/bin/bash
-    yum update -y
-    yum install -y mysql-server
-    systemctl start mysqld
-    systemctl enable mysqld
+    set -xe
+    exec > /var/log/user-data.log 2>&1
 
-    until mysqladmin ping -u root --silent 2>/dev/null; do
-      sleep 2
+    dnf update -y
+    dnf install -y docker --allowerasing
+
+    systemctl start docker
+    systemctl enable docker
+
+    # Esperar a que Docker esté listo
+    until docker info > /dev/null 2>&1; do
+      echo "Esperando Docker..."
+      sleep 3
     done
 
-    mysql -u root <<-EOSQL
+    # Levantar MySQL como contenedor
+    docker run -d \
+      --name mysql \
+      -e MYSQL_ROOT_PASSWORD="${var.db_password}" \
+      -e MYSQL_ROOT_HOST=% \
+      -p 3306:3306 \
+      --log-opt max-size=10m \
+      --log-opt max-file=3 \
+      --restart unless-stopped \
+      mysql:8 \
+      --bind-address=0.0.0.0 \
+      --performance-schema=OFF
+
+    echo "Esperando que MySQL esté listo..."
+    sleep 20
+
+    until docker exec mysql mysqladmin ping -uroot -p"${var.db_password}" --silent 2>/dev/null; do
+      echo "MySQL aún no responde, esperando..."
+      sleep 5
+    done
+
+    echo "MySQL listo. Creando bases de datos..."
+
+    docker exec mysql mysql -uroot -p"${var.db_password}" -e "
       CREATE DATABASE IF NOT EXISTS ${var.db_name_ventas};
       CREATE DATABASE IF NOT EXISTS ${var.db_name_despachos};
       CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '${var.db_password}';
       GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-      ALTER USER 'root'@'localhost' IDENTIFIED BY '${var.db_password}';
       FLUSH PRIVILEGES;
-    EOSQL
+    "
 
-    echo "[mysqld]" >> /etc/my.cnf
-    echo "bind-address = 0.0.0.0" >> /etc/my.cnf
-    systemctl restart mysqld
+    echo "Script finalizado correctamente"
   EOF
 
   tags = {
@@ -254,6 +342,14 @@ resource "aws_ecs_task_definition" "app" {
 
       portMappings = [{ containerPort = 8080 }]
 
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health/readiness || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 5
+        startPeriod = 120
+      }
+
       environment = [
         { name = "DB_ENDPOINT", value = aws_instance.db.private_ip },
         { name = "DB_PORT",     value = "3306" },
@@ -270,6 +366,12 @@ resource "aws_ecs_task_definition" "app" {
           awslogs-stream-prefix = "backend-ventas"
         }
       }
+
+      restartPolicy = {
+        enabled              = true
+        ignoredExitCodes     = []
+        restartAttemptPeriod = 60
+      }
     },
 
     {
@@ -277,6 +379,14 @@ resource "aws_ecs_task_definition" "app" {
       image = "${aws_ecr_repository.backend_despachos.repository_url}:latest"
 
       portMappings = [{ containerPort = 8081 }]
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health/readiness || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 5
+        startPeriod = 120
+      }
 
       environment = [
         { name = "DB_ENDPOINT", value = aws_instance.db.private_ip },
@@ -294,6 +404,12 @@ resource "aws_ecs_task_definition" "app" {
           awslogs-stream-prefix = "backend-despachos"
         }
       }
+
+      restartPolicy = {
+        enabled              = true
+        ignoredExitCodes     = []
+        restartAttemptPeriod = 60
+      }
     },
 
     {
@@ -303,8 +419,8 @@ resource "aws_ecs_task_definition" "app" {
       portMappings = [{ containerPort = 80 }]
 
       dependsOn = [
-        { containerName = "backend-ventas",    condition = "START" },
-        { containerName = "backend-despachos", condition = "START" }
+        { containerName = "backend-ventas",    condition = "HEALTHY" },
+        { containerName = "backend-despachos", condition = "HEALTHY" }
       ]
 
       logConfiguration = {
@@ -336,7 +452,7 @@ resource "aws_ecs_service" "app" {
   deployment_maximum_percent         = 100
 
   network_configuration {
-    subnets          = [aws_subnet.public.id]
+    subnets          = [aws_subnet.public.id, aws_subnet.public_b.id]
     security_groups  = [aws_security_group.ecs.id]
     assign_public_ip = true
   }

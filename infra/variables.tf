@@ -22,4 +22,3 @@ variable "db_name_ventas" {
 variable "db_name_despachos" {
   default = "despachos_db"
 }
-

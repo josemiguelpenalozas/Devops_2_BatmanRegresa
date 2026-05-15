@@ -12,7 +12,7 @@ output "frontend_ecr_url" {
 
 output "ec2_private_ip" {
   value       = aws_instance.db.private_ip
-  description = "IP privada de la EC2 con MySQL"
+  description = "IP privada de la EC2 con MySQL (solo accesible desde la VPC)"
 }
 
 output "ecs_cluster_name" {
