@@ -25,7 +25,6 @@ resource "aws_vpc" "main" {
   }
 }
 
-# Subred pública A: donde corren los contenedores ECS
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.1.0/24"
@@ -37,7 +36,6 @@ resource "aws_subnet" "public" {
   }
 }
 
-# Subred pública B: segunda zona para ECS
 resource "aws_subnet" "public_b" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.2.0/24"
@@ -49,7 +47,6 @@ resource "aws_subnet" "public_b" {
   }
 }
 
-# Subred privada: donde vive la EC2 con MySQL
 resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.3.0/24"
@@ -60,7 +57,6 @@ resource "aws_subnet" "private" {
   }
 }
 
-# Internet Gateway: puerta de salida/entrada para la subred pública
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
@@ -69,7 +65,6 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
-# EIP para el NAT Gateway
 resource "aws_eip" "nat" {
   domain = "vpc"
 
@@ -78,7 +73,6 @@ resource "aws_eip" "nat" {
   }
 }
 
-# NAT Gateway: permite que la subred privada acceda a internet (para descargar Docker image)
 resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public.id
@@ -90,7 +84,6 @@ resource "aws_nat_gateway" "main" {
   depends_on = [aws_internet_gateway.main]
 }
 
-# Tabla de rutas pública
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -114,7 +107,6 @@ resource "aws_route_table_association" "public_b" {
   route_table_id = aws_route_table.public.id
 }
 
-# Tabla de rutas privada: sale a internet via NAT Gateway (necesario para docker pull)
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
@@ -137,7 +129,6 @@ resource "aws_route_table_association" "private" {
 # SECURITY GROUPS
 ############################
 
-# SG para los contenedores ECS
 resource "aws_security_group" "ecs" {
   name   = "${var.project_name}-sg-ecs"
   vpc_id = aws_vpc.main.id
@@ -174,7 +165,6 @@ resource "aws_security_group" "ecs" {
   }
 }
 
-# SG para la EC2 MySQL
 resource "aws_security_group" "db" {
   name   = "${var.project_name}-sg-db"
   vpc_id = aws_vpc.main.id
@@ -187,7 +177,6 @@ resource "aws_security_group" "db" {
   }
 }
 
-# Regla separada: solo ECS puede hablar con MySQL
 resource "aws_security_group_rule" "mysql_from_ecs" {
   type                     = "ingress"
   from_port                = 3306
@@ -219,8 +208,6 @@ resource "aws_ecr_repository" "frontend" {
 
 ############################
 # EC2 MySQL (subred privada)
-# Usa Docker en lugar de instalar mysql-server directamente,
-# ya que mysql-server no está disponible en los repos de AL2023.
 ############################
 
 data "aws_ami" "amazon_linux" {
@@ -256,13 +243,11 @@ resource "aws_instance" "db" {
     systemctl start docker
     systemctl enable docker
 
-    # Esperar a que Docker esté listo
     until docker info > /dev/null 2>&1; do
       echo "Esperando Docker..."
       sleep 3
     done
 
-    # Levantar MySQL como contenedor
     docker run -d \
       --name mysql \
       -e MYSQL_ROOT_PASSWORD="${var.db_password}" \
