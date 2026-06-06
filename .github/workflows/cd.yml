@@ -1,62 +1,107 @@
 name: Despliegue continuo Batman Regresa
- 
+
 on:
   push:
     branches:
       - main
   workflow_dispatch:
- 
-env:
-  AWS_REGION: us-east-1
-  CLUSTER: batman-cluster
-  SERVICE: app
-  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
- 
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
- 
+    env:
+      AWS_REGION: us-east-1
+      CLUSTER: batman-cluster
+
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
- 
+
       - name: Configurar credenciales de AWS
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
- 
+
       - name: Login en ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
- 
+
+      - name: Obtener AWS Account ID
+        run: |
+          echo "ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
+
+      - name: Definir URLs de ECR
+        run: |
+          echo "ECR_VENTAS=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/batman-backend-ventas" >> $GITHUB_ENV
+          echo "ECR_DESPACHOS=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/batman-backend-despachos" >> $GITHUB_ENV
+          echo "ECR_FRONTEND=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/batman-frontend" >> $GITHUB_ENV
+
       - name: Build y Push Backend Ventas
         run: |
-          docker build --platform linux/amd64 \
-            -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/batman-backend-ventas:latest \
-            ./back-Ventas_SpringBoot/Springboot-API-REST
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/batman-backend-ventas:latest
- 
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $ECR_VENTAS:${{ github.sha }} \
+            ./back-Ventas_SpringBoot/Springboot-API-REST \
+            --load
+          docker push $ECR_VENTAS:${{ github.sha }}
+
       - name: Build y Push Backend Despachos
         run: |
-          docker build --platform linux/amd64 \
-            -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/batman-backend-despachos:latest \
-            ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/batman-backend-despachos:latest
- 
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $ECR_DESPACHOS:${{ github.sha }} \
+            ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO \
+            --load
+          docker push $ECR_DESPACHOS:${{ github.sha }}
+
       - name: Build y Push Frontend
         run: |
-          docker build --platform linux/amd64 \
-            -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/batman-frontend:latest \
-            ./front_despacho
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/batman-frontend:latest
- 
-      - name: Forzar redespliegue en ECS
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $ECR_FRONTEND:${{ github.sha }} \
+            ./front_despacho \
+            --load
+          docker push $ECR_FRONTEND:${{ github.sha }}
+
+      - name: Instalar kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Conectar al cluster EKS
         run: |
-          aws ecs update-service \
-            --cluster $CLUSTER \
-            --service $SERVICE \
-            --force-new-deployment
- 
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name $CLUSTER
+
+      - name: Aplicar manifests de Kubernetes
+        run: |
+          kubectl apply -f infra/k8s/
+
+      - name: Actualizar imagen Backend Ventas
+        run: |
+          kubectl set image deployment/backend-ventas \
+            backend-ventas=$ECR_VENTAS:${{ github.sha }}
+
+      - name: Actualizar imagen Backend Despachos
+        run: |
+          kubectl set image deployment/backend-despachos \
+            backend-despachos=$ECR_DESPACHOS:${{ github.sha }}
+
+      - name: Actualizar imagen Frontend
+        run: |
+          kubectl set image deployment/frontend \
+            frontend=$ECR_FRONTEND:${{ github.sha }}
+
+      - name: Esperar rollout Backend Ventas
+        run: kubectl rollout status deployment/backend-ventas
+
+      - name: Esperar rollout Backend Despachos
+        run: kubectl rollout status deployment/backend-despachos
+
+      - name: Esperar rollout Frontend
+        run: kubectl rollout status deployment/frontend
+
+      - name: Obtener URL pública del Frontend
+        run: |
+          kubectl get service frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'

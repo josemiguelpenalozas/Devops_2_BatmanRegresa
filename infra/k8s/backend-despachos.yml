@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-despachos
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-despachos
+  template:
+    metadata:
+      labels:
+        app: backend-despachos
+    spec:
+      containers:
+        - name: backend-despachos
+          image: 118302444321.dkr.ecr.us-east-1.amazonaws.com/batman-backend-despachos:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          env:
+            - name: DB_ENDPOINT
+              value: mysql-despachos
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_NAME
+              value: despachos_db
+            - name: DB_USERNAME
+              value: root
+            - name: DB_PASSWORD
+              value: root
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-despachos
+spec:
+  selector:
+    app: backend-despachos
+  ports:
+    - port: 8081
+      targetPort: 8081
+  type: ClusterIP
