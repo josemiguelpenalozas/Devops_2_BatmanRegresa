@@ -24,11 +24,20 @@ spec:
             - name: DB_PORT
               value: "3306"
             - name: DB_NAME
-              value: despachos_db
+              valueFrom:
+                secretKeyRef:
+                  name: backend-despachos-secret
+                  key: DB_NAME
             - name: DB_USERNAME
-              value: root
+              valueFrom:
+                secretKeyRef:
+                  name: backend-despachos-secret
+                  key: DB_USERNAME
             - name: DB_PASSWORD
-              value: root
+              valueFrom:
+                secretKeyRef:
+                  name: backend-despachos-secret
+                  key: DB_PASSWORD
           resources:
             requests:
               cpu: "250m"
