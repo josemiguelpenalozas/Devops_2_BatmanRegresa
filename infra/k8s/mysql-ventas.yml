@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-ventas
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql-ventas
+  template:
+    metadata:
+      labels:
+        app: mysql-ventas
+    spec:
+      containers:
+        - name: mysql-ventas
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: root
+            - name: MYSQL_DATABASE
+              value: ventas_db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-ventas
+spec:
+  selector:
+    app: mysql-ventas
+  ports:
+    - port: 3306
+      targetPort: 3306
+  type: ClusterIP

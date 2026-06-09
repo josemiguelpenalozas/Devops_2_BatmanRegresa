@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-despachos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql-despachos
+  template:
+    metadata:
+      labels:
+        app: mysql-despachos
+    spec:
+      containers:
+        - name: mysql-despachos
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: root
+            - name: MYSQL_DATABASE
+              value: despachos_db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-despachos
+spec:
+  selector:
+    app: mysql-despachos
+  ports:
+    - port: 3306
+      targetPort: 3306
+  type: ClusterIP
