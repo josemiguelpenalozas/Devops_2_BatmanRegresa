@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-ventas
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-ventas
+  template:
+    metadata:
+      labels:
+        app: backend-ventas
+    spec:
+      containers:
+        - name: backend-ventas
+          image: 118302444321.dkr.ecr.us-east-1.amazonaws.com/batman-backend-ventas:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_ENDPOINT
+              value: mysql-ventas
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: backend-ventas-secret
+                  key: DB_NAME
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: backend-ventas-secret
+                  key: DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: backend-ventas-secret
+                  key: DB_PASSWORD
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-ventas
+spec:
+  selector:
+    app: backend-ventas
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
