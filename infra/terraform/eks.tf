@@ -11,6 +11,7 @@ resource "aws_eks_cluster" "main" {
       aws_subnet.public_a.id,
       aws_subnet.public_b.id
     ]
+    security_group_ids = [aws_security_group.eks_cluster_sg.id]
   }
 
   # El cluster depende de que la VPC y subnets estén listas
@@ -18,6 +19,24 @@ resource "aws_eks_cluster" "main" {
     aws_subnet.public_a,
     aws_subnet.public_b,
   ]
+}
+
+############################
+# Launch Template - Worker Nodes
+############################
+
+resource "aws_launch_template" "workers_lt" {
+  name_prefix   = "${var.project_name}-workers-"
+  instance_type = "t3.medium"
+
+  vpc_security_group_ids = [aws_security_group.eks_nodes_sg.id]
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "${var.project_name}-worker-node"
+    }
+  }
 }
 
 ############################
@@ -40,6 +59,12 @@ resource "aws_eks_node_group" "workers" {
     max_size     = 4
   }
 
-  instance_types = ["t3.medium"]
-  capacity_type  = "ON_DEMAND"
+  launch_template {
+    id      = aws_launch_template.workers_lt.id
+    version = "$Latest"
+  }
+
+  capacity_type = "ON_DEMAND"
+
+  depends_on = [aws_launch_template.workers_lt]
 }
